@@ -391,15 +391,7 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
         z_formula = f"INDEX('{MAPPING_SHEET_NAME}'!E:E,MATCH({sheet_name}!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
         aa_formula = f"INDEX('{MAPPING_SHEET_NAME}'!D:D,MATCH({sheet_name}!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
 
-        # AB열 (상대구분): 매핑표를 참조한 정적 값 (기존 파일 관행과 동일)
-        counter_code_norm = norm_code(rec["상대계정코드"])
-        counter_gubun = ""
-        if counter_code_norm:
-            counter_entry = mapping.get(counter_code_norm)
-            if counter_entry is None:
-                warnings.append(f"[{sheet_name}] 상대계정코드 {rec['상대계정코드']} 이(가) 매핑표에 없습니다 (행 {r}, 상대구분 공백 처리).")
-            else:
-                counter_gubun = counter_entry["구분1"] if counter_entry["구분1"] is not None else ""
+        # AB열 (상대구분): 수기로 확인하는 항목이므로 자동으로 채우지 않고 공란으로 둔다.
 
         values_by_col = {
             "A": ("text", raw_no),
@@ -436,8 +428,7 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
         row_cells.append(build_cell("Y", r, styles.get("Y"), "formula_num", None, y_formula, y_value))
         row_cells.append(build_cell("Z", r, styles.get("Z"), "formula_str", None, z_formula, gubun1))
         row_cells.append(build_cell("AA", r, styles.get("AA"), "formula_str", None, aa_formula, gubun2))
-        if counter_gubun:
-            row_cells.append(build_cell("AB", r, styles.get("AB"), "text", counter_gubun))
+        row_cells.append(build_cell("AB", r, styles.get("AB"), "text", None))
 
         xml_parts.append(f'<row r="{r}" spans="1:28" x14ac:dyDescent="0.3">' + "".join(row_cells) + "</row>")
 
