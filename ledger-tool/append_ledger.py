@@ -91,6 +91,46 @@ def esc(s):
     )
 
 
+EXCEL_EPOCH = datetime.date(1899, 12, 30)
+
+
+def excel_date_serial(date_str):
+    """'YYYY/MM/DD' 문자열을 엑셀 날짜 일련번호(정수)로 변환. B열을 정렬 가능한
+    실제 날짜형으로 넣기 위해 사용한다."""
+    if not date_str:
+        return None
+    try:
+        y, m, d = (int(x) for x in date_str.split("/"))
+        return (datetime.date(y, m, d) - EXCEL_EPOCH).days
+    except (ValueError, TypeError):
+        return None
+
+
+def find_or_create_date_style(zip_entries):
+    """styles.xml에서 날짜 서식(numFmtId 14~22, 내장 날짜 서식)이 적용된 cellXf를
+    찾아 그 인덱스를 재사용한다. 하나도 없으면 새로 하나 추가한다(기존 인덱스는
+    그대로 유지되므로 다른 셀들에 영향 없음)."""
+    styles_xml = zip_entries["xl/styles.xml"].decode("utf-8")
+    m = re.search(r'<cellXfs count="(\d+)">(.*?)</cellXfs>', styles_xml, re.S)
+    count = int(m.group(1))
+    inner = m.group(2)
+    xfs = re.findall(r"<xf[^>]*/>|<xf[^>]*>.*?</xf>", inner, re.S)
+
+    for i, xf in enumerate(xfs):
+        fm = re.search(r'numFmtId="(\d+)"', xf)
+        if fm and 14 <= int(fm.group(1)) <= 22:
+            return i
+
+    new_xf = '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    new_inner = inner + new_xf
+    new_count = count + 1
+    new_block = f'<cellXfs count="{new_count}">{new_inner}</cellXfs>'
+    zip_entries["xl/styles.xml"] = (
+        styles_xml[:m.start()] + new_block + styles_xml[m.end():]
+    ).encode("utf-8")
+    return count  # 새로 추가된 xf의 인덱스 (0-based, 기존 count가 곧 새 인덱스)
+
+
 def normalize_date_str(v):
     """master 시트의 날짜 컬럼은 시트마다 실제 날짜형(datetime)일 수도, 텍스트일 수도
     있어서 (예: HH 시트는 datetime), 비교/출력이 가능하도록 항상 'YYYY/MM/DD' 문자열로
@@ -366,7 +406,7 @@ def build_cell(col_letter, row_num, style, kind, value, formula=None, cached=Non
     raise ValueError(kind)
 
 
-def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name):
+def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name, date_style_id):
     """records: raw에서 뽑은 거래 dict 리스트. 반환: xml 문자열, 매핑 실패 경고 리스트"""
     xml_parts = []
     warnings = []
@@ -405,7 +445,7 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
 
         values_by_col = {
             "A": ("text", raw_no),
-            "B": ("text", date_str),
+            "B": ("number", excel_date_serial(date_str)),
             "C": ("number", acct_code_num),
             "D": ("text", acct_name),
             "E": ("text", rec["거래처코드"]),
@@ -434,7 +474,8 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
         for col in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N",
                     "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"]:
             kind, val = values_by_col[col]
-            row_cells.append(build_cell(col, r, styles.get(col), kind, val))
+            style = date_style_id if col == "B" else styles.get(col)
+            row_cells.append(build_cell(col, r, style, kind, val))
         row_cells.append(build_cell("Y", r, styles.get("Y"), "formula_num", None, y_formula, y_value))
         row_cells.append(build_cell("Z", r, styles.get("Z"), "formula_str", None, z_formula, gubun1))
         row_cells.append(build_cell("AA", r, styles.get("AA"), "formula_str", None, aa_formula, gubun2))
@@ -480,7 +521,7 @@ def shift_merge_cells(sheet_xml, old_start, old_end, n):
 # 8. 메인 처리: 하나의 raw 파일을 master의 해당 시트에 반영
 # ---------------------------------------------------------------------------
 
-def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
+def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping, date_style_id):
     records, blocks_report, period = parse_raw_file(raw_path)
     validation = validate_blocks(blocks_report)
 
@@ -509,7 +550,9 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
     template_row, styles = find_style_template(sheet_xml, last_data_row)
 
     new_row_start = last_data_row + 1
-    new_rows_xml, warnings = build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
+    new_rows_xml, warnings = build_new_rows(
+        new_row_start, records, styles, mapping, running, sheet_name, date_style_id
+    )
     n_added = len(records)
 
     # 마지막 실거래 행(last_data_row) 뒤에 남아있는 모든 내용(각주, 표 끝 표시 '-' 등
@@ -627,11 +670,13 @@ def main():
     infolist = zf.infolist()
     zf.close()
 
+    date_style_id = find_or_create_date_style(zip_entries)
+
     reports = []
     for raw_path in raw_files:
         sheet_name = os.path.splitext(os.path.basename(raw_path))[0]
         print(f"=== {sheet_name} 처리 중 (raw: {os.path.basename(raw_path)}) ===")
-        report = apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping)
+        report = apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping, date_style_id)
         reports.append(report)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
