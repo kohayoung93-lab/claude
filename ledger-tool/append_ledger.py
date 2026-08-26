@@ -527,6 +527,12 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
         return f'<autoFilter ref="{m.group(1)}{last_data_row + n_added}"'
     sheet_xml = re.sub(r'<autoFilter ref="([A-Z0-9\$:]+?)\d+"', repl_af, sheet_xml)
 
+    # 필터 버튼(드롭다운)은 남기되, 걸려있는 필터 조건은 해제하고 숨겨진 행을 모두 보이게 한다.
+    sheet_xml = re.sub(
+        r'<autoFilter ref="([^"]+)">.*?</autoFilter>', r'<autoFilter ref="\1"/>', sheet_xml, flags=re.S
+    )
+    sheet_xml = re.sub(r'(<row r="\d+"[^>]*?) hidden="1"', r"\1", sheet_xml)
+
     # mergeCells (footer 안에 있던 것들) 행 번호 이동
     if marker_row:
         sheet_xml = shift_merge_cells(sheet_xml, marker_row, old_end_row, n_added)
