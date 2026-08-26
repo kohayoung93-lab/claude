@@ -555,6 +555,32 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
 # 9. 진입점
 # ---------------------------------------------------------------------------
 
+def drop_calc_chain(zip_entries, infolist):
+    """calcChain.xml은 엑셀이 수식 계산 순서를 캐싱해둔 파일이라, 새 수식 셀을
+    추가하면 그 내용과 실제 수식 셀 목록이 어긋나 엑셀이 파일을 열 때 '내용에
+    문제가 있다'며 복구 창을 띄운다. 이 파일은 없어도 엑셀이 열 때 자동으로
+    다시 만들어주므로, 안전하게 빼고 관련 참조도 같이 정리한다.
+    """
+    calc_path = "xl/calcChain.xml"
+    if calc_path not in zip_entries:
+        return infolist
+
+    del zip_entries[calc_path]
+    infolist = [i for i in infolist if i.filename != calc_path]
+
+    ct_path = "[Content_Types].xml"
+    ct = zip_entries[ct_path].decode("utf-8")
+    ct = re.sub(r'<Override[^>]*calcChain[^>]*/>', "", ct)
+    zip_entries[ct_path] = ct.encode("utf-8")
+
+    rels_path = "xl/_rels/workbook.xml.rels"
+    rels = zip_entries[rels_path].decode("utf-8")
+    rels = re.sub(r'<Relationship[^>]*calcChain[^>]*/>', "", rels)
+    zip_entries[rels_path] = rels.encode("utf-8")
+
+    return infolist
+
+
 def find_single_xlsx(dir_path, label):
     files = [f for f in glob.glob(os.path.join(dir_path, "*.xlsx")) if not os.path.basename(f).startswith("~$")]
     if len(files) == 0:
@@ -593,6 +619,8 @@ def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     master_stem = os.path.splitext(os.path.basename(master_path))[0]
     output_path = os.path.join(OUTPUT_DIR, f"{master_stem}_updated_{timestamp}.xlsx")
+
+    infolist = drop_calc_chain(zip_entries, infolist)
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as out_zf:
         for info in infolist:
