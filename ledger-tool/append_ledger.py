@@ -396,8 +396,10 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
         else:
             gubun1 = map_entry["구분1"] if map_entry["구분1"] is not None else ""
             gubun2 = map_entry["구분2"] if map_entry["구분2"] is not None else ""
-        z_formula = f"INDEX('{MAPPING_SHEET_NAME}'!E:E,MATCH({sheet_name}!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
-        aa_formula = f"INDEX('{MAPPING_SHEET_NAME}'!D:D,MATCH({sheet_name}!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
+        # 시트 이름에 괄호/공백 등 특수문자가 있으면(예: HL(엠트웰브)) 수식에서 반드시
+        # 작은따옴표로 감싸야 하므로, 이름에 상관없이 항상 감싼다.
+        z_formula = f"INDEX('{MAPPING_SHEET_NAME}'!E:E,MATCH('{sheet_name}'!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
+        aa_formula = f"INDEX('{MAPPING_SHEET_NAME}'!D:D,MATCH('{sheet_name}'!C{r},'{MAPPING_SHEET_NAME}'!A:A,0))"
 
         # AB열 (상대구분): 수기로 확인하는 항목이므로 자동으로 채우지 않고 공란으로 둔다.
 
