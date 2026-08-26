@@ -91,6 +91,17 @@ def esc(s):
     )
 
 
+def normalize_date_str(v):
+    """master 시트의 날짜 컬럼은 시트마다 실제 날짜형(datetime)일 수도, 텍스트일 수도
+    있어서 (예: HH 시트는 datetime), 비교/출력이 가능하도록 항상 'YYYY/MM/DD' 문자열로
+    맞춘다."""
+    if v is None:
+        return None
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.strftime("%Y/%m/%d")
+    return str(v).strip()
+
+
 def norm_code(v):
     """계정코드/상대계정코드를 매핑표와 비교 가능한 문자열로 정규화."""
     if v is None:
@@ -260,7 +271,7 @@ def read_target_sheet_state(master_path, sheet_name):
         a = row[0]
         if isinstance(a, str) and DATE_NO_RE.match(a):
             last_data_row = i
-            last_date_str = row[1]
+            last_date_str = normalize_date_str(row[1])
             acct_name, debit, credit = row[3], row[7], row[8]
             cur = running.get(acct_name, [0, 0])
             cur[0] += (debit or 0)
