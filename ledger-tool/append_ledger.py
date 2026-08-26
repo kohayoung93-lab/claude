@@ -479,6 +479,14 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
     marker_row = state["marker_row"]
     running = state["running"]
 
+    if period and state["last_date_str"] and period[0] <= state["last_date_str"]:
+        raise RuntimeError(
+            f"[{sheet_name}] raw 파일의 기간({period[0]} ~ {period[1]})이 master의 "
+            f"기존 마지막 거래일자({state['last_date_str']})와 겹치거나 그보다 앞섭니다. "
+            f"같은 기간을 두 번 넣으려는 것일 수 있습니다. master 폴더에 지난번 output 결과 파일을 "
+            f"넣었는지 다시 확인해 주세요."
+        )
+
     if not records:
         return {
             "sheet": sheet_name, "added": 0, "validation": validation,
