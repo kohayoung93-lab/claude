@@ -30,7 +30,6 @@ MASTER_DIR = os.path.join(BASE_DIR, "master")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
 MAPPING_SHEET_NAME = "99.이카운트 계정과목표_HF"
-FOOTER_MARKER = "<차이내역>"
 
 # raw 원장 파일의 컬럼 순서 (ERP 다운로드 그대로)
 RAW_COLS = [
@@ -251,15 +250,14 @@ def read_target_sheet_state(master_path, sheet_name):
     ws = wb[sheet_name]
 
     last_data_row = None
-    marker_row = None
     running = {}  # 계정명별 (누적차변, 누적대변) - Y열(잔액2) 수식 재현용
     last_date_str = None
 
+    # 시트 끝까지 전부 스캔한다 (중간에 멈추지 않음). '<차이내역>' 메모나 '-' 같은
+    # 표 끝 표시처럼, 마지막 실거래 행 뒤에 남아있는 내용의 형태를 미리 알 수 없으므로
+    # last_data_row 이후에 남는 모든 것은 apply_raw_to_sheet에서 통째로 아래로 밀어낸다.
     for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
         a = row[0]
-        if isinstance(a, str) and a.strip() == FOOTER_MARKER:
-            marker_row = i
-            break
         if isinstance(a, str) and DATE_NO_RE.match(a):
             last_data_row = i
             last_date_str = row[1]
@@ -274,7 +272,6 @@ def read_target_sheet_state(master_path, sheet_name):
         raise RuntimeError(f"'{sheet_name}' 시트에서 기존 거래 데이터를 찾지 못했습니다.")
     return {
         "last_data_row": last_data_row,
-        "marker_row": marker_row,
         "running": running,
         "last_date_str": last_date_str,
     }
@@ -439,7 +436,7 @@ def build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
 # 7. footer 블록 이동 (마커 행부터 시트 끝까지, 행 번호를 n만큼 밀기)
 # ---------------------------------------------------------------------------
 
-def shift_footer_block(block_text, old_start, old_end, n):
+def shift_trailing_block(block_text, old_start, old_end, n):
     def repl_row(m):
         return f'<row r="{int(m.group(1)) + n}"'
     block_text = re.sub(r'<row r="(\d+)"', repl_row, block_text)
@@ -476,7 +473,6 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
 
     state = read_target_sheet_state(master_path, sheet_name)
     last_data_row = state["last_data_row"]
-    marker_row = state["marker_row"]
     running = state["running"]
 
     if period and state["last_date_str"] and period[0] <= state["last_date_str"]:
@@ -503,27 +499,22 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
     new_rows_xml, warnings = build_new_rows(new_row_start, records, styles, mapping, running, sheet_name)
     n_added = len(records)
 
-    if marker_row:
-        # footer 블록 원문 추출 (marker_row 부터 </sheetData> 직전까지)
-        m_start = re.search(rf'<row r="{marker_row}"', sheet_xml)
+    # 마지막 실거래 행(last_data_row) 뒤에 남아있는 모든 내용(각주, 표 끝 표시 '-' 등
+    # 무엇이든)을 통째로 붙잡아서 새 행 개수만큼 아래로 밀어낸다. 내용이 뭔지 미리
+    # 알 수 없으므로 절대 그 자리에 새 행을 덮어쓰지 않는다 (행 번호 중복 방지).
+    end_row_of_sheet = max(int(x) for x in re.findall(r'<row r="(\d+)"', sheet_xml))
+    last_row_match = re.search(rf'<row r="{last_data_row}"[^>]*>.*?</row>', sheet_xml, re.S)
+    insert_at = last_row_match.end()
+
+    if end_row_of_sheet > last_data_row:
         m_end = re.search(r"</sheetData>", sheet_xml)
-        footer_old_text = sheet_xml[m_start.start():m_end.start()]
-        old_end_row = max(int(x) for x in re.findall(r'<row r="(\d+)"', footer_old_text))
-
-        footer_new_text = shift_footer_block(footer_old_text, marker_row, old_end_row, n_added)
-
-        sheet_xml = (
-            sheet_xml[:m_start.start()]
-            + new_rows_xml
-            + footer_new_text
-            + sheet_xml[m_end.start():]
-        )
-        new_last_row = old_end_row + n_added
+        trailing_old_text = sheet_xml[insert_at:m_end.start()]
+        trailing_new_text = shift_trailing_block(trailing_old_text, last_data_row + 1, end_row_of_sheet, n_added)
+        sheet_xml = sheet_xml[:insert_at] + new_rows_xml + trailing_new_text + sheet_xml[m_end.start():]
     else:
-        # 각주 블록이 없는 시트: 마지막 데이터 행 뒤에 그냥 이어붙임
-        insert_at = re.search(rf'<row r="{last_data_row}"[^>]*>.*?</row>', sheet_xml, re.S).end()
         sheet_xml = sheet_xml[:insert_at] + new_rows_xml + sheet_xml[insert_at:]
-        new_last_row = last_data_row + n_added
+
+    new_last_row = end_row_of_sheet + n_added
 
     # dimension 갱신
     def repl_dim(m):
@@ -541,9 +532,9 @@ def apply_raw_to_sheet(zip_entries, master_path, sheet_name, raw_path, mapping):
     )
     sheet_xml = re.sub(r'(<row r="\d+"[^>]*?) hidden="1"', r"\1", sheet_xml)
 
-    # mergeCells (footer 안에 있던 것들) 행 번호 이동
-    if marker_row:
-        sheet_xml = shift_merge_cells(sheet_xml, marker_row, old_end_row, n_added)
+    # mergeCells (밀려난 각주/표 끝 표시 블록 안에 있던 것들) 행 번호 이동
+    if end_row_of_sheet > last_data_row:
+        sheet_xml = shift_merge_cells(sheet_xml, last_data_row + 1, end_row_of_sheet, n_added)
 
     zip_entries[sheet_xml_path] = sheet_xml.encode("utf-8")
 
