@@ -1,9 +1,9 @@
 # 실제 회계 데이터가 담긴 파일은 절대 git에 올리지 않습니다.
 input_raw/*
-mapping/*
+master/*
 output/*
 !input_raw/.gitkeep
-!mapping/.gitkeep
+!master/.gitkeep
 !output/.gitkeep
 
 *.xlsx
