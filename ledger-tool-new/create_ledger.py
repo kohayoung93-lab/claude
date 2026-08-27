@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ERP 원장(raw) 엑셀만으로, 기존 누적 워크북 없이 새 워크북을 처음부터 만드는 도구.
+ERP 원장(raw) 엑셀만으로, 기존 누적 워크북(거래 데이터가 담긴 master) 없이
+새 워크북을 처음부터 만드는 도구.
 
 누적형 도구(ledger-tool)와의 차이:
-  - master 워크북이 필요 없습니다. raw 파일과 계정과목표 매핑 파일만 있으면 됩니다.
+  - 거래 데이터가 담긴 master 워크북이 필요 없습니다. 대신 계정과목표
+    (99.이카운트 계정과목표_HF) 시트만 포함된 "양식" 파일이 필요합니다 —
+    계정코드가 어떤 구분(채권/채무/자산 등)에 속하는지는 raw 원장 파일에
+    없고 이 표에만 있기 때문입니다.
   - 이월잔액 행을 "제외"하지 않고 "포함"합니다 (처음 만드는 것이므로 기초잔액이 필요).
 
 폴더 구조 (이 파일과 같은 위치):
   input_raw/  - ERP에서 받은 raw 원장 xlsx 파일들. 파일명 = 만들어질 시트 이름 (예: HT.xlsx -> "HT" 시트)
-  mapping/    - 계정과목표 매핑 파일 1개 (99.이카운트 계정과목표_HF 시트와 같은 구조:
-                코드, 이카운트 계정과목, Code, 계정과목, 특관자 추출계정)
+  master/     - 계정과목표(99.이카운트 계정과목표_HF) 시트만 포함된 양식 파일 1개
+                (거래 데이터는 없어도 됨)
   output/     - 새로 만들어진 워크북이 저장되는 곳
 
 사용법:
@@ -30,8 +34,10 @@ from openpyxl.utils import get_column_letter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RAW_DIR = os.path.join(BASE_DIR, "input_raw")
-MAPPING_DIR = os.path.join(BASE_DIR, "mapping")
+MASTER_DIR = os.path.join(BASE_DIR, "master")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+
+MAPPING_SHEET_NAME = "99.이카운트 계정과목표_HF"
 
 RAW_COLS = [
     "일자-No", "계정코드", "계정명", "거래처코드", "거래처명", "적요",
@@ -78,9 +84,14 @@ def parse_date_str(s):
 # 매핑표 로딩
 # ---------------------------------------------------------------------------
 
-def load_mapping(mapping_path):
-    wb = openpyxl.load_workbook(mapping_path, read_only=True, data_only=True)
-    ws = wb.worksheets[0]
+def load_mapping(master_template_path):
+    wb = openpyxl.load_workbook(master_template_path, read_only=True, data_only=True)
+    if MAPPING_SHEET_NAME not in wb.sheetnames:
+        raise RuntimeError(
+            f"master 폴더의 양식 파일에서 '{MAPPING_SHEET_NAME}' 시트를 찾지 못했습니다. "
+            f"이 파일에 있는 시트: {wb.sheetnames}"
+        )
+    ws = wb[MAPPING_SHEET_NAME]
     mapping = {}
     first = True
     for row in ws.iter_rows(values_only=True):
@@ -279,11 +290,11 @@ def find_files(dir_path, label, required=True):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    mapping_files = find_files(MAPPING_DIR, "mapping")
-    if len(mapping_files) > 1:
-        raise RuntimeError(f"mapping 폴더에는 파일이 1개만 있어야 합니다. 현재: {[os.path.basename(f) for f in mapping_files]}")
-    mapping = load_mapping(mapping_files[0])
-    print(f"[mapping] {os.path.basename(mapping_files[0])} ({len(mapping)}개 계정코드)")
+    master_files = find_files(MASTER_DIR, "master")
+    if len(master_files) > 1:
+        raise RuntimeError(f"master 폴더에는 파일이 1개만 있어야 합니다. 현재: {[os.path.basename(f) for f in master_files]}")
+    mapping = load_mapping(master_files[0])
+    print(f"[master 양식] {os.path.basename(master_files[0])} ({len(mapping)}개 계정코드)")
 
     raw_files = find_files(RAW_DIR, "raw")
     print(f"[raw 파일 {len(raw_files)}개]")
