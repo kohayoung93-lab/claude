@@ -120,6 +120,7 @@ def parse_raw_file(raw_path):
     block = None
     title_code, title_name = None, None
     period = None
+    company_name = None
     title_re = re.compile(r"(\d+)\(([^)]+)\)\s*$")
 
     def flush_block():
@@ -133,6 +134,10 @@ def parse_raw_file(raw_path):
                 pm = PERIOD_RE.search(first_cell)
                 if pm:
                     period = (pm.group(1), pm.group(2))
+            if company_name is None:
+                parts = first_cell.split("/")
+                if len(parts) > 1:
+                    company_name = parts[1].strip()
             m = title_re.search(first_cell)
             if m:
                 title_code, title_name = m.group(1), m.group(2)
@@ -185,7 +190,7 @@ def parse_raw_file(raw_path):
 
     flush_block()
     wb.close()
-    return transactions, blocks_report, period
+    return transactions, blocks_report, period, company_name
 
 
 def validate_blocks(blocks_report):
@@ -214,15 +219,23 @@ def validate_blocks(blocks_report):
 # ---------------------------------------------------------------------------
 
 FONT_NORMAL = Font(name="Arial", size=10)
-FONT_HEADER = Font(name="Arial", size=10, bold=True)
-THIN = Side(style="thin", color="BFBFBF")
+FONT_HEADER = Font(name="Arial", size=11, bold=True)
+FONT_TITLE = Font(name="Arial", size=11, bold=True)
+THIN = Side(style="thin", color="FF000000")
 BORDER_ALL = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 MONEY_FMT = "#,##0;[Red]\\(#,##0\\)"
 DATE_FMT = "yyyy/mm/dd"
 
+# 원본 워크북에서 공통적으로 숨겨져 있던 컬럼들 (잔액/최초작성~예금주명/상대거래처코드~명)
+HIDDEN_COLS = {"J", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "W", "X"}
 
-def build_sheet(wb, sheet_name, records, mapping, warnings):
+
+def build_sheet(wb, sheet_name, records, mapping, warnings, company_name):
     ws = wb.create_sheet(title=sheet_name)
+
+    c = ws.cell(row=1, column=1, value=company_name or sheet_name)
+    c.font = FONT_TITLE
+    c.alignment = Alignment(horizontal="left", vertical="center")
 
     for col_idx, name in enumerate(MASTER_HEADER, start=1):
         c = ws.cell(row=2, column=col_idx, value=name)
@@ -230,7 +243,6 @@ def build_sheet(wb, sheet_name, records, mapping, warnings):
         c.border = BORDER_ALL
         c.alignment = Alignment(horizontal="center", vertical="center")
     ws.freeze_panes = "A3"
-    ws.auto_filter.ref = f"A2:{get_column_letter(len(MASTER_HEADER))}2"
 
     running = {}
     for offset, rec in enumerate(records):
@@ -274,8 +286,21 @@ def build_sheet(wb, sheet_name, records, mapping, warnings):
             elif col_letter in ("H", "I", "J", "Y"):
                 c.number_format = MONEY_FMT
 
+    last_row = 2 + len(records)
+    for col_letter in ("H", "I"):
+        c = ws[f"{col_letter}1"]
+        c.value = f"=SUBTOTAL(9,{col_letter}3:{col_letter}{last_row})"
+        c.font = FONT_NORMAL
+        c.number_format = MONEY_FMT
+
+    ws.auto_filter.ref = f"A2:{get_column_letter(len(MASTER_HEADER))}{last_row}"
+
     for col_idx in range(1, len(MASTER_HEADER) + 1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = 14
+        col_letter = get_column_letter(col_idx)
+        dim = ws.column_dimensions[col_letter]
+        dim.width = 14
+        if col_letter in HIDDEN_COLS:
+            dim.hidden = True
 
     return ws
 
@@ -309,11 +334,11 @@ def main():
     for raw_path in raw_files:
         sheet_name = os.path.splitext(os.path.basename(raw_path))[0]
         print(f"=== {sheet_name} 처리 중 (raw: {os.path.basename(raw_path)}) ===")
-        records, blocks_report, period = parse_raw_file(raw_path)
+        records, blocks_report, period, company_name = parse_raw_file(raw_path)
         validation = validate_blocks(blocks_report)
         warnings = []
         if records:
-            build_sheet(wb, sheet_name, records, mapping, warnings)
+            build_sheet(wb, sheet_name, records, mapping, warnings, company_name)
         reports.append({
             "sheet": sheet_name, "added": len(records), "validation": validation,
             "period": period, "warnings": warnings,
