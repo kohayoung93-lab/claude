@@ -8,3 +8,6 @@ output/*
 
 *.xlsx
 !**/*.xlsx.example
+
+__pycache__/
+*.pyc

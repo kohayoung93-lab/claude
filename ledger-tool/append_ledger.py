@@ -645,7 +645,14 @@ def drop_calc_chain(zip_entries, infolist):
 def find_single_xlsx(dir_path, label):
     files = [f for f in glob.glob(os.path.join(dir_path, "*.xlsx")) if not os.path.basename(f).startswith("~$")]
     if len(files) == 0:
-        raise RuntimeError(f"{label} 폴더({dir_path})에 xlsx 파일이 없습니다.")
+        others = [f for f in os.listdir(dir_path) if f != ".gitkeep"]
+        detail = f" 지금 이 폴더 안에 있는 파일: {others}" if others else " 이 폴더는 지금 비어있습니다."
+        raise RuntimeError(
+            f"{label} 폴더({dir_path})에서 xlsx 파일을 찾지 못했습니다.{detail} "
+            f"파일 확장자가 정확히 .xlsx인지 확인해 주세요 (윈도우 탐색기 상단 '보기' 메뉴에서 "
+            f"'파일 확장명'을 체크하면 진짜 확장자가 보입니다 - .xls나 다른 형식이면 엑셀에서 "
+            f"'다른 이름으로 저장' → 파일 형식을 'Excel 통합 문서(*.xlsx)'로 다시 저장해 주세요)."
+        )
     if len(files) > 1 and label == "master":
         raise RuntimeError(f"{label} 폴더에는 파일이 1개만 있어야 합니다. 현재: {[os.path.basename(f) for f in files]}")
     return files if label != "master" else files[0]
