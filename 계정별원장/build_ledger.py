@@ -97,8 +97,17 @@ def load_account_list(ws_acc):
     return header_row, accounts
 
 
+def fill_bs_total_column(ws_bs_formula):
+    """재무상태표 F열(당기 금액) = B열 + C열 수식을 A열에 계정명이 있는 모든 행에 채운다."""
+    for r in range(1, ws_bs_formula.max_row + 1):
+        name = ws_bs_formula.cell(r, 1).value
+        if not name or not isinstance(name, str):
+            continue
+        ws_bs_formula.cell(r, 6, f"=B{r}+C{r}")
+
+
 def build_bs_map(ws_bs_formula, ws_bs_value):
-    """재무상태표 A열(계정명) -> row. 동일 이름이 여러 행이면 당기(F열)값이
+    """재무상태표 A열(계정명) -> row. 동일 이름이 여러 행이면 당기(B+C)값이
     존재/0이 아닌 행을 우선 채택(그래도 안되면 첫 행)."""
     name_rows = {}
     for r in range(1, ws_bs_formula.max_row + 1):
@@ -107,12 +116,19 @@ def build_bs_map(ws_bs_formula, ws_bs_value):
             continue
         name_rows.setdefault(name, []).append(r)
 
+    def bc_sum(r):
+        b = ws_bs_value.cell(r, 2).value
+        c = ws_bs_value.cell(r, 3).value
+        b = b if isinstance(b, (int, float)) else 0
+        c = c if isinstance(c, (int, float)) else 0
+        return b + c
+
     resolved, ambiguous = {}, {}
     for name, rows in name_rows.items():
         if len(rows) == 1:
             resolved[name] = rows[0]
         else:
-            nonzero = [r for r in rows if ws_bs_value.cell(r, 6).value not in (None, 0)]
+            nonzero = [r for r in rows if bc_sum(r) != 0]
             resolved[name] = nonzero[0] if len(nonzero) == 1 else rows[0]
             ambiguous[name] = rows
     return resolved, ambiguous
@@ -225,6 +241,8 @@ def main():
     ws_acc = wb["계정"]
     ws_bs = wb["재무상태표"]
     ws_bs_val = wb_val["재무상태표"]
+
+    fill_bs_total_column(ws_bs)
 
     header_row, accounts = load_account_list(ws_acc)
     bs_map, bs_ambiguous = build_bs_map(ws_bs, ws_bs_val)
