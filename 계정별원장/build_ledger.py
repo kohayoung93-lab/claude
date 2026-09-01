@@ -214,10 +214,25 @@ def parse_raw_blocks(path):
             if ws.cell(r, 1).value == "합계":
                 total_r = r
                 break
+        has_total_row = total_r is not None
         if total_r is None:
             total_r = end_r
-        rows = [tuple(ws.cell(r, c).value for c in range(1, max_col + 1))
+        rows = [list(ws.cell(r, c).value for c in range(1, max_col + 1))
                 for r in range(start_r, total_r + 1)]
+
+        if has_total_row:
+            # '합계' 행의 I열(잔액)은 반드시 값이 있어야 재무제표 일치 판정(J1)이
+            # 정상 동작하므로, Raw 원본이 공란으로 내보낸 경우 G열(차변금액) -
+            # H열(대변금액)로 대신 계산해서 채운다.
+            total_row_vals = rows[-1]
+            i_val = total_row_vals[8] if len(total_row_vals) > 8 else None
+            if i_val is None or (isinstance(i_val, str) and i_val.strip() == ""):
+                g_val = total_row_vals[6] if len(total_row_vals) > 6 else None
+                h_val = total_row_vals[7] if len(total_row_vals) > 7 else None
+                g_num = g_val if isinstance(g_val, (int, float)) else 0
+                h_num = h_val if isinstance(h_val, (int, float)) else 0
+                total_row_vals[8] = g_num - h_num
+
         blocks[code] = {"name": raw_name, "rows": rows, "src": path}
     return blocks
 
