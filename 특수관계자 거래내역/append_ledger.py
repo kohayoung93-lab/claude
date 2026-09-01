@@ -29,6 +29,8 @@ RAW_DIR = os.path.join(BASE_DIR, "input_raw")
 MASTER_DIR = os.path.join(BASE_DIR, "master")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
+ZIP_PASSWORD = "qwer4321!"
+
 MAPPING_SHEET_NAME = "99.이카운트 계정과목표_HF"
 
 # raw 원장 파일의 컬럼 순서 (ERP 다운로드 그대로)
@@ -642,7 +644,56 @@ def drop_calc_chain(zip_entries, infolist):
     return infolist
 
 
+def _open_zip_for_read(zip_path):
+    """AES 암호화 zip까지 지원하려면 pyzipper가 필요하다(있으면 사용, 없으면
+    표준 라이브러리 zipfile로 대체 - 구버전 방식(ZipCrypto) 암호 zip만 열 수 있음)."""
+    try:
+        import pyzipper
+        return pyzipper.AESZipFile(zip_path)
+    except ImportError:
+        return zipfile.ZipFile(zip_path)
+
+
+def extract_zip_files(dir_path, label):
+    """dir_path 안에 있는 zip 파일들을 고정 비밀번호로 풀어서 같은 폴더에 xlsx로
+    풀어놓는다. zip이 없으면 그냥 넘어간다(이미 xlsx만 있는 기존 방식도 계속 동작)."""
+    zip_paths = [
+        os.path.join(dir_path, f) for f in os.listdir(dir_path)
+        if f.lower().endswith(".zip") and not f.startswith("~$")
+    ]
+    for zip_path in zip_paths:
+        zip_name = os.path.basename(zip_path)
+        try:
+            zf = _open_zip_for_read(zip_path)
+        except Exception as e:
+            raise RuntimeError(f"{label} 폴더의 '{zip_name}' 압축파일을 열지 못했습니다: {e}")
+        try:
+            zf.setpassword(ZIP_PASSWORD.encode())
+            for name in zf.namelist():
+                base = os.path.basename(name)
+                if not base.lower().endswith(".xlsx") or base.startswith("~$") or base.startswith("._"):
+                    continue
+                if "__MACOSX" in name:
+                    continue
+                try:
+                    data = zf.read(name)
+                except RuntimeError as e:
+                    raise RuntimeError(
+                        f"{label} 폴더의 '{zip_name}' 압축파일 비밀번호가 올바르지 않습니다: {e}"
+                    )
+                with open(os.path.join(dir_path, base), "wb") as out_f:
+                    out_f.write(data)
+        except NotImplementedError:
+            raise RuntimeError(
+                f"{label} 폴더의 '{zip_name}'은(는) AES 암호화 zip으로 보입니다. "
+                f"'pip3 install pyzipper'로 pyzipper를 설치한 뒤 다시 실행해 주세요."
+            )
+        finally:
+            zf.close()
+
+
 def find_single_xlsx(dir_path, label):
+    extract_zip_files(dir_path, label)
     files = [f for f in glob.glob(os.path.join(dir_path, "*.xlsx")) if not os.path.basename(f).startswith("~$")]
     if len(files) == 0:
         others = [f for f in os.listdir(dir_path) if f != ".gitkeep"]

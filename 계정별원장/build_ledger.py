@@ -37,6 +37,7 @@ import glob
 import os
 import re
 import sys
+import zipfile
 
 import openpyxl
 from openpyxl.utils import get_column_letter
@@ -48,6 +49,8 @@ RAW_DIR = os.path.join(BASE_DIR, "input_raw")
 MASTER_DIR = os.path.join(BASE_DIR, "master")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
+ZIP_PASSWORD = "qwer4321!"
+
 TITLE_RE = re.compile(r"계정별원장\s*/\s*(\d+)\((.+)\)\s*$")
 NUM_FMT = "#,##0"
 HEADER_FILL = PatternFill("solid", fgColor="DDEBF7")
@@ -58,7 +61,56 @@ RAW_HEADERS = ["일자-No.", "계정코드", "계정명", "거래처코드", "�
 COL_WIDTHS = [18, 8, 14, 14, 16, 26, 18, 18, 18, 10, 14, 12, 10, 20]
 
 
+def _open_zip_for_read(zip_path):
+    """AES 암호화 zip까지 지원하려면 pyzipper가 필요하다(있으면 사용, 없으면
+    표준 라이브러리 zipfile로 대체 - 구버전 방식(ZipCrypto) 암호 zip만 열 수 있음)."""
+    try:
+        import pyzipper
+        return pyzipper.AESZipFile(zip_path)
+    except ImportError:
+        return zipfile.ZipFile(zip_path)
+
+
+def extract_zip_files(dir_path, label):
+    """dir_path 안에 있는 zip 파일들을 고정 비밀번호로 풀어서 같은 폴더에 xlsx로
+    풀어놓는다. zip이 없으면 그냥 넘어간다(이미 xlsx만 있는 기존 방식도 계속 동작)."""
+    zip_paths = [
+        os.path.join(dir_path, f) for f in os.listdir(dir_path)
+        if f.lower().endswith(".zip") and not f.startswith("~$")
+    ]
+    for zip_path in zip_paths:
+        zip_name = os.path.basename(zip_path)
+        try:
+            zf = _open_zip_for_read(zip_path)
+        except Exception as e:
+            raise RuntimeError(f"{label} 폴더의 '{zip_name}' 압축파일을 열지 못했습니다: {e}")
+        try:
+            zf.setpassword(ZIP_PASSWORD.encode())
+            for name in zf.namelist():
+                base = os.path.basename(name)
+                if not base.lower().endswith(".xlsx") or base.startswith("~$") or base.startswith("._"):
+                    continue
+                if "__MACOSX" in name:
+                    continue
+                try:
+                    data = zf.read(name)
+                except RuntimeError as e:
+                    raise RuntimeError(
+                        f"{label} 폴더의 '{zip_name}' 압축파일 비밀번호가 올바르지 않습니다: {e}"
+                    )
+                with open(os.path.join(dir_path, base), "wb") as out_f:
+                    out_f.write(data)
+        except NotImplementedError:
+            raise RuntimeError(
+                f"{label} 폴더의 '{zip_name}'은(는) AES 암호화 zip으로 보입니다. "
+                f"'pip3 install pyzipper'로 pyzipper를 설치한 뒤 다시 실행해 주세요."
+            )
+        finally:
+            zf.close()
+
+
 def find_files(dir_path, label, required=True):
+    extract_zip_files(dir_path, label)
     files = [f for f in glob.glob(os.path.join(dir_path, "*.xlsx")) if not os.path.basename(f).startswith("~$")]
     if required and len(files) == 0:
         raise RuntimeError(f"{label} 폴더({dir_path})에 xlsx 파일이 없습니다.")
@@ -97,22 +149,45 @@ def load_account_list(ws_acc):
     return header_row, accounts
 
 
+def normalize_name(name):
+    """공백류 문자(스페이스/탭/줄바꿈/전각공백 등) 차이를 무시하기 위해 전부 제거한 이름."""
+    if not isinstance(name, str):
+        return name
+    return re.sub(r"\s+", "", name)
+
+
+def fill_bs_total_column(ws_bs_formula):
+    """재무상태표 F열(당기 금액) = B열 + C열 수식을 A열에 계정명이 있는 모든 행에 채운다."""
+    for r in range(1, ws_bs_formula.max_row + 1):
+        name = ws_bs_formula.cell(r, 1).value
+        if not name or not isinstance(name, str):
+            continue
+        ws_bs_formula.cell(r, 6, f"=B{r}+C{r}")
+
+
 def build_bs_map(ws_bs_formula, ws_bs_value):
-    """재무상태표 A열(계정명) -> row. 동일 이름이 여러 행이면 당기(F열)값이
+    """재무상태표 A열(계정명) -> row. 동일 이름이 여러 행이면 당기(B+C)값이
     존재/0이 아닌 행을 우선 채택(그래도 안되면 첫 행)."""
     name_rows = {}
     for r in range(1, ws_bs_formula.max_row + 1):
         name = ws_bs_formula.cell(r, 1).value
         if not name or not isinstance(name, str):
             continue
-        name_rows.setdefault(name, []).append(r)
+        name_rows.setdefault(normalize_name(name), []).append(r)
+
+    def bc_sum(r):
+        b = ws_bs_value.cell(r, 2).value
+        c = ws_bs_value.cell(r, 3).value
+        b = b if isinstance(b, (int, float)) else 0
+        c = c if isinstance(c, (int, float)) else 0
+        return b + c
 
     resolved, ambiguous = {}, {}
     for name, rows in name_rows.items():
         if len(rows) == 1:
             resolved[name] = rows[0]
         else:
-            nonzero = [r for r in rows if ws_bs_value.cell(r, 6).value not in (None, 0)]
+            nonzero = [r for r in rows if bc_sum(r) != 0]
             resolved[name] = nonzero[0] if len(nonzero) == 1 else rows[0]
             ambiguous[name] = rows
     return resolved, ambiguous
@@ -139,10 +214,25 @@ def parse_raw_blocks(path):
             if ws.cell(r, 1).value == "합계":
                 total_r = r
                 break
+        has_total_row = total_r is not None
         if total_r is None:
             total_r = end_r
-        rows = [tuple(ws.cell(r, c).value for c in range(1, max_col + 1))
+        rows = [list(ws.cell(r, c).value for c in range(1, max_col + 1))
                 for r in range(start_r, total_r + 1)]
+
+        if has_total_row:
+            # '합계' 행의 I열(잔액)은 반드시 값이 있어야 재무제표 일치 판정(J1)이
+            # 정상 동작하므로, Raw 원본이 공란으로 내보낸 경우 G열(차변금액) -
+            # H열(대변금액)로 대신 계산해서 채운다.
+            total_row_vals = rows[-1]
+            i_val = total_row_vals[8] if len(total_row_vals) > 8 else None
+            if i_val is None or (isinstance(i_val, str) and i_val.strip() == ""):
+                g_val = total_row_vals[6] if len(total_row_vals) > 6 else None
+                h_val = total_row_vals[7] if len(total_row_vals) > 7 else None
+                g_num = g_val if isinstance(g_val, (int, float)) else 0
+                h_num = h_val if isinstance(h_val, (int, float)) else 0
+                total_row_vals[8] = g_num - h_num
+
         blocks[code] = {"name": raw_name, "rows": rows, "src": path}
     return blocks
 
@@ -226,6 +316,8 @@ def main():
     ws_bs = wb["재무상태표"]
     ws_bs_val = wb_val["재무상태표"]
 
+    fill_bs_total_column(ws_bs)
+
     header_row, accounts = load_account_list(ws_acc)
     bs_map, bs_ambiguous = build_bs_map(ws_bs, ws_bs_val)
 
@@ -260,7 +352,7 @@ def main():
 
     for row_no, code, name in accounts:
         code_str = str(code) if code is not None else None
-        bs_row = bs_map.get(name)
+        bs_row = bs_map.get(normalize_name(name))
 
         if code_str in code_to_sheet:
             sheet_name = code_to_sheet[code_str]

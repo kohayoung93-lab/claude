@@ -23,7 +23,7 @@ ERP(이카운트)에서 받은 "거래처별계정별원장" raw 파일을 정�
 ## 폴더 구조
 
 ```
-ledger-tool/
+특수관계자 거래내역/
   input_raw/   raw 원장 xlsx를 넣는 곳 (파일명 = 시트명, 예: HT.xlsx → "HT" 시트)
   master/      누적 관리 중인 워크북 1개만 넣는 곳
   output/      결과가 저장되는 곳 (원본은 그대로 유지됨)
@@ -41,6 +41,14 @@ ledger-tool/
    pip3 install openpyxl
    ```
    (Windows에서 pip3가 안 되면 `pip install openpyxl`)
+
+암호 걸린 zip(예: 회사 메일/공유 시스템에서 암호화해서 받은 압축파일)을 그대로
+`master/`나 `input_raw/`에 넣어도 됩니다 — 비밀번호 `qwer4321!`로 자동으로
+풀어서 처리합니다. 다만 그 zip이 AES 암호화 방식이면 아래 패키지도 설치해야
+합니다(안 하면 실행 시 안내 메시지가 뜹니다):
+```
+pip3 install pyzipper
+```
 
 ## 매달 사용하는 법
 
