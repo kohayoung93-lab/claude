@@ -97,6 +97,13 @@ def load_account_list(ws_acc):
     return header_row, accounts
 
 
+def normalize_name(name):
+    """공백류 문자(스페이스/탭/줄바꿈/전각공백 등) 차이를 무시하기 위해 전부 제거한 이름."""
+    if not isinstance(name, str):
+        return name
+    return re.sub(r"\s+", "", name)
+
+
 def fill_bs_total_column(ws_bs_formula):
     """재무상태표 F열(당기 금액) = B열 + C열 수식을 A열에 계정명이 있는 모든 행에 채운다."""
     for r in range(1, ws_bs_formula.max_row + 1):
@@ -114,7 +121,7 @@ def build_bs_map(ws_bs_formula, ws_bs_value):
         name = ws_bs_formula.cell(r, 1).value
         if not name or not isinstance(name, str):
             continue
-        name_rows.setdefault(name, []).append(r)
+        name_rows.setdefault(normalize_name(name), []).append(r)
 
     def bc_sum(r):
         b = ws_bs_value.cell(r, 2).value
@@ -278,7 +285,7 @@ def main():
 
     for row_no, code, name in accounts:
         code_str = str(code) if code is not None else None
-        bs_row = bs_map.get(name)
+        bs_row = bs_map.get(normalize_name(name))
 
         if code_str in code_to_sheet:
             sheet_name = code_to_sheet[code_str]
